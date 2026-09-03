@@ -1,0 +1,12 @@
+# Secrets and live catalogs — never commit
+keys.env
+*.env
+catalog.json
+resolved.json
+auth.json
+.grok/auth.json
+
+# Editor / OS
+.DS_Store
+*~
+*.swp

@@ -1,0 +1,9 @@
+# Minimal Grok Build config for a new host. Do not put API keys in this file.
+# After `grok-models refresh`, ask Grok to fill the helper region from
+# ~/.config/grok-models/resolved.json (unique [model.NAME] only).
+
+[models]
+default = "grok-4.6"
+
+# BEGIN grok-models-helper
+# END grok-models-helper

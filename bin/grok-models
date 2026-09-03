@@ -1,0 +1,771 @@
+#!/usr/bin/env python3
+"""Grok Build BYOK helper: keys + live catalog + short allowlist.
+
+Never writes ~/.grok/config.toml (that is Grok Build's job from resolved.json).
+Never prints a full API key except `grok-models env` (meant for eval).
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path.home()
+DIR = HOME / ".config" / "grok-models"
+KEYS_FILE = DIR / "keys.env"
+CATALOG_FILE = DIR / "catalog.json"
+RESOLVED_FILE = DIR / "resolved.json"
+ALLOWLIST_FILE = DIR / "allowlist.json"
+ENV_D = HOME / ".config" / "environment.d" / "99-grok-models.conf"
+
+KEY_NAMES = ("OPENROUTER_API_KEY", "NEURALWATT_API_KEY", "VENICE_API_KEY")
+
+SKIP_TAGS = (
+    "-flex",
+    "-fast",
+    "-short",
+    ":free",
+    ":batch",
+    "-image",
+    "-video",
+    "-audio",
+    "-tts",
+    "-embedding",
+    "-vision",
+)
+
+PROVIDERS = {
+    "openrouter": {
+        "label": "OpenRouter",
+        "env_key": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models_url": "https://openrouter.ai/api/v1/models",
+        "key_help": "https://openrouter.ai/keys",
+        "prefix": "or",
+    },
+    "neuralwatt": {
+        "label": "Neuralwatt",
+        "env_key": "NEURALWATT_API_KEY",
+        "base_url": "https://api.neuralwatt.com/v1",
+        "models_url": "https://api.neuralwatt.com/v1/models",
+        "key_help": "https://portal.neuralwatt.com (Dashboard → API Keys)",
+        "prefix": "nw",
+    },
+    "venice": {
+        "label": "Venice AI",
+        "env_key": "VENICE_API_KEY",
+        "base_url": "https://api.venice.ai/api/v1",
+        "models_url": "https://api.venice.ai/api/v1/models",
+        "key_help": "https://venice.ai/settings/api",
+        "prefix": "venice",
+    },
+}
+
+# ~16 slots. Native grok is listed so the picker story is complete, but it
+# is not a BYOK table. Venice families resolve only after a key is stored.
+DEFAULT_ALLOWLIST = {
+    "version": 2,
+    "families": [
+        {
+            "family": "grok-4.6",
+            "config_id": "grok-4.6",
+            "provider": "native",
+            "exact": ["grok-4.6"],
+        },
+        {
+            "family": "deepseek-v4-flash",
+            "config_id": "nw-deepseek-v4-flash",
+            "provider": "neuralwatt",
+            "exact": ["deepseek-v4-flash"],
+            "prefix": ["deepseek-v4-flash"],
+        },
+        {
+            "family": "glm-5.3",
+            "config_id": "nw-glm-5-3",
+            "provider": "neuralwatt",
+            "exact": ["glm-5.3"],
+            "prefix": ["glm-5.3", "glm-5."],
+        },
+        {
+            "family": "kimi-k3",
+            "config_id": "nw-kimi-k3",
+            "provider": "neuralwatt",
+            "exact": ["kimi-k3"],
+            "prefix": ["kimi-k3"],
+        },
+        {
+            "family": "kimi-k2.7-code",
+            "config_id": "nw-kimi-k2-7-code",
+            "provider": "neuralwatt",
+            "exact": ["kimi-k2.7-code"],
+            "prefix": ["kimi-k2.7-code", "kimi-k2"],
+        },
+        {
+            "family": "claude-fable",
+            "config_id": "or-claude-fable",
+            "provider": "openrouter",
+            "exact": ["anthropic/claude-fable-5.1"],
+            "fallback": ["~anthropic/claude-fable-latest"],
+            "prefix": ["anthropic/claude-fable-"],
+        },
+        {
+            "family": "claude-opus",
+            "config_id": "or-claude-opus",
+            "provider": "openrouter",
+            "exact": ["anthropic/claude-opus-5"],
+            "fallback": ["~anthropic/claude-opus-latest"],
+            "prefix": ["anthropic/claude-opus-"],
+        },
+        {
+            "family": "gemini-flash",
+            "config_id": "or-gemini-flash",
+            "provider": "openrouter",
+            "exact": ["google/gemini-3.8-flash"],
+            "fallback": ["~google/gemini-flash-latest"],
+            "prefix": ["google/gemini-3.", "google/gemini-"],
+        },
+        {
+            "family": "muse-spark",
+            "config_id": "or-muse-spark",
+            "provider": "openrouter",
+            "exact": ["meta/muse-spark-1.3"],
+            "prefix": ["meta/muse-spark-1.3"],
+        },
+        {
+            "family": "muse-spark-contributor",
+            "config_id": "or-muse-spark-contributor",
+            "provider": "openrouter",
+            "exact": ["meta/muse-spark-1.3-contributor"],
+            "prefix": ["meta/muse-spark-1.3-contributor"],
+        },
+        {
+            "family": "openrouter-auto",
+            "config_id": "or-openrouter-auto",
+            "provider": "openrouter",
+            "exact": ["openrouter/auto"],
+            "prefix": ["openrouter/auto"],
+        },
+        {
+            "family": "gpt-sol",
+            "config_id": "or-gpt-sol",
+            "provider": "openrouter",
+            "exact": ["openai/gpt-5.6-sol"],
+            "prefix": ["openai/gpt-5.6-sol"],
+        },
+        {
+            "family": "gpt-luna",
+            "config_id": "or-gpt-luna",
+            "provider": "openrouter",
+            "exact": ["openai/gpt-5.6-luna"],
+            "prefix": ["openai/gpt-5.6-luna"],
+        },
+        {
+            "family": "venice-deepseek-v4-flash",
+            "config_id": "venice-deepseek-v4-flash",
+            "provider": "venice",
+            "exact": ["deepseek-v4-flash-0731"],
+            "prefix": ["deepseek-v4-flash"],
+        },
+        {
+            "family": "venice-uncensored",
+            "config_id": "venice-uncensored",
+            "provider": "venice",
+            "exact": ["venice-uncensored-1-2"],
+            "prefix": ["venice-uncensored-1"],
+        },
+        {
+            "family": "venice-uncensored-rp",
+            "config_id": "venice-uncensored-rp",
+            "provider": "venice",
+            "exact": ["venice-uncensored-role-play"],
+            "prefix": ["venice-uncensored-role-play"],
+        },
+        {
+            "family": "venice-gemini-flash",
+            "config_id": "venice-gemini-flash",
+            "provider": "venice",
+            "exact": ["gemini-3-8-flash"],
+            "prefix": ["gemini-3-8-flash", "gemini-3-"],
+        },
+        {
+            "family": "venice-muse-spark",
+            "config_id": "venice-muse-spark",
+            "provider": "venice",
+            "exact": ["muse-spark-1-3", "meta-muse-spark-1-3"],
+            "prefix": ["muse-spark", "meta-muse-spark"],
+        },
+    ],
+}
+
+PROFILE_SNIPPET = """
+# grok-models BYOK keys (do not print; used by Grok Build env_key)
+if [ -f "$HOME/.config/grok-models/keys.env" ]; then
+  set -a
+  . "$HOME/.config/grok-models/keys.env"
+  set +a
+fi
+"""
+
+BASHRC_MARKER = "grok-models BYOK keys"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def mask(value: str) -> str:
+    v = value.strip()
+    if not v:
+        return "(empty)"
+    if len(v) <= 8:
+        return "••••"
+    return f"{v[:3]}…{v[-4:]} ({len(v)} chars)"
+
+
+def atomic_write(path: Path, data: str | bytes, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = data.encode("utf-8") if isinstance(data, str) else data
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def load_keys() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not KEYS_FILE.is_file():
+        return out
+    for line in KEYS_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        v = v.strip().strip("'").strip('"')
+        if k in KEY_NAMES and v:
+            out[k] = v
+    return out
+
+
+def write_keys(keys: dict[str, str]) -> None:
+    DIR.mkdir(parents=True, exist_ok=True)
+    DIR.chmod(0o700)
+    lines = [
+        "# Grok Build BYOK keys. Mode 600. Do not commit. Do not paste into chat.",
+        "# Source of truth for grok-models. Not written into ~/.grok/config.toml.",
+        "",
+    ]
+    for name in KEY_NAMES:
+        if keys.get(name):
+            val = keys[name].replace("\n", "").replace("\r", "")
+            lines.append(f"{name}={val}")
+    atomic_write(KEYS_FILE, "\n".join(lines) + "\n", 0o600)
+    KEYS_FILE.chmod(0o600)
+
+    # Derived copy so COSMIC-launched grok sees env_key values after login.
+    env_lines = [
+        "# Generated from ~/.config/grok-models/keys.env by grok-models.",
+        "# Edit keys.env (or run: grok-models key). Do not put keys in config.toml.",
+        "",
+    ]
+    for name in KEY_NAMES:
+        val = keys.get(name) or ""
+        if not val:
+            continue
+        if re.search(r"""[\s#"']""", val):
+            q = val.replace("\\", "\\\\").replace('"', '\\"')
+            env_lines.append(f'{name}="{q}"')
+        else:
+            env_lines.append(f"{name}={val}")
+    ENV_D.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(ENV_D, "\n".join(env_lines) + "\n", 0o600)
+
+    env = os.environ.copy()
+    names = []
+    for name, val in keys.items():
+        if val:
+            env[name] = val
+            os.environ[name] = val
+            names.append(name)
+    if names:
+        subprocess.run(
+            ["systemctl", "--user", "import-environment", *names],
+            check=False,
+            env=env,
+        )
+        subprocess.run(
+            ["dbus-update-activation-environment", "--systemd", *names],
+            check=False,
+            env=env,
+        )
+
+
+def ensure_shell_hooks() -> None:
+    profile = HOME / ".profile"
+    if profile.is_file():
+        text = profile.read_text(encoding="utf-8")
+        if BASHRC_MARKER not in text:
+            with profile.open("a", encoding="utf-8") as fh:
+                fh.write("\n" + PROFILE_SNIPPET)
+    bashrc = HOME / ".bashrc"
+    if bashrc.is_file():
+        text = bashrc.read_text(encoding="utf-8")
+        if BASHRC_MARKER not in text:
+            needle = "case $- in"
+            if needle in text:
+                text = text.replace(needle, PROFILE_SNIPPET + "\n" + needle, 1)
+            else:
+                text = PROFILE_SNIPPET + "\n" + text
+            bashrc.write_text(text, encoding="utf-8")
+
+
+def load_json(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def load_allowlist() -> dict:
+    data = load_json(ALLOWLIST_FILE)
+    if isinstance(data, dict) and isinstance(data.get("families"), list) and data["families"]:
+        return data
+    atomic_write(ALLOWLIST_FILE, json.dumps(DEFAULT_ALLOWLIST, indent=2) + "\n")
+    return DEFAULT_ALLOWLIST
+
+
+def cmd_env() -> int:
+    keys = load_keys()
+    if not keys:
+        print("# no keys in ~/.config/grok-models/keys.env", file=sys.stderr)
+        return 1
+    for name in KEY_NAMES:
+        if name in keys:
+            print(f"export {name}={shlex.quote(keys[name])}")
+    return 0
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_chat_model(item: dict) -> bool:
+    mid = str(item.get("id") or "")
+    if ":batch" in mid:
+        return False
+    arch = item.get("architecture") or {}
+    if isinstance(arch, dict):
+        outputs = arch.get("output_modalities")
+        if isinstance(outputs, list) and outputs and "text" not in outputs:
+            return False
+    vtype = item.get("type")
+    if vtype in {"image", "video", "audio", "tts", "embedding", "embeddings"}:
+        return False
+    return True
+
+
+def normalize_model(item: dict) -> dict | None:
+    if not isinstance(item, dict) or not is_chat_model(item):
+        return None
+    mid = item.get("id") or item.get("name")
+    if not mid:
+        return None
+    spec = item.get("model_spec") if isinstance(item.get("model_spec"), dict) else {}
+    meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    ctx = (
+        item.get("context_length")
+        or item.get("context_window")
+        or item.get("max_model_len")
+        or spec.get("availableContextTokens")
+        or (item.get("top_provider") or {}).get("context_length")
+    )
+    display = meta.get("display_name") or spec.get("name") or item.get("name") or str(mid)
+    created = _int_or_none(item.get("created")) or 0
+    return {
+        "id": str(mid),
+        "name": str(display),
+        "context_length": _int_or_none(ctx),
+        "created": created,
+    }
+
+
+def fetch_models(provider: dict, api_key: str) -> list[dict]:
+    req = urllib.request.Request(
+        provider["models_url"],
+        headers={
+            "User-Agent": "grok-models-helper/2.0",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        payload = json.load(resp)
+    data = payload.get("data", payload if isinstance(payload, list) else [])
+    out = []
+    for item in data:
+        row = normalize_model(item)
+        if row:
+            out.append(row)
+    out.sort(key=lambda x: (-x["created"], x["id"].lower()))
+    return out
+
+
+def skipped_variant(mid: str, allowed_exact: set[str]) -> bool:
+    if mid in allowed_exact:
+        return False
+    low = mid.lower()
+    return any(tag in low for tag in SKIP_TAGS)
+
+
+def version_key(mid: str) -> tuple:
+    parts = re.findall(r"\d+", mid)
+    nums = tuple(int(p) for p in parts[:8])
+    return (len(nums), nums, mid.lower())
+
+
+def pick_newest(cands: list[dict]) -> dict | None:
+    if not cands:
+        return None
+    return max(cands, key=lambda m: (m.get("created") or 0, version_key(m["id"])))
+
+
+def resolve_family(family: dict, catalog: list[dict]) -> dict | None:
+    by_id = {m["id"]: m for m in catalog}
+    exact = list(family.get("exact") or [])
+    fallback = list(family.get("fallback") or [])
+    allowed = set(exact + fallback)
+    for mid in exact + fallback:
+        if mid in by_id and not skipped_variant(mid, allowed):
+            return by_id[mid]
+        if mid in by_id:
+            return by_id[mid]
+    prefixes = list(family.get("prefix") or [])
+    for prefix in prefixes:
+        cands = [
+            m
+            for m in catalog
+            if m["id"].startswith(prefix) and not skipped_variant(m["id"], allowed)
+        ]
+        hit = pick_newest(cands)
+        if hit:
+            return hit
+    return None
+
+
+def cmd_refresh() -> int:
+    keys = load_keys()
+    previous = load_json(CATALOG_FILE) or {}
+    prev_providers = previous.get("providers") if isinstance(previous.get("providers"), dict) else {}
+
+    providers_out: dict[str, dict] = {}
+    failed: list[str] = []
+    fetched_any = False
+
+    print("Refreshing provider catalogs (allowlist only; no TOML writes)…")
+    for pid, p in PROVIDERS.items():
+        key = keys.get(p["env_key"])
+        if not key:
+            print(f"  {p['label']}: skipped (no API key yet)")
+            old = prev_providers.get(pid)
+            if isinstance(old, dict) and old.get("models"):
+                providers_out[pid] = old
+            continue
+        try:
+            catalog = fetch_models(p, key)
+        except urllib.error.HTTPError as e:
+            print(f"  {p['label']}: fetch failed ({e.code}); keeping last good catalog")
+            failed.append(pid)
+            old = prev_providers.get(pid)
+            if isinstance(old, dict) and old.get("models"):
+                providers_out[pid] = old
+            continue
+        except Exception as e:
+            print(f"  {p['label']}: fetch failed ({e}); keeping last good catalog")
+            failed.append(pid)
+            old = prev_providers.get(pid)
+            if isinstance(old, dict) and old.get("models"):
+                providers_out[pid] = old
+            continue
+        if not catalog:
+            print(f"  {p['label']}: empty list; keeping last good catalog")
+            failed.append(pid)
+            old = prev_providers.get(pid)
+            if isinstance(old, dict) and old.get("models"):
+                providers_out[pid] = old
+            continue
+        fetched_any = True
+        providers_out[pid] = {"ok": True, "count": len(catalog), "models": catalog}
+        print(f"  {p['label']}: {len(catalog)} live")
+
+    catalog_doc = {"updated": now_iso(), "providers": providers_out}
+    if fetched_any or providers_out:
+        atomic_write(CATALOG_FILE, json.dumps(catalog_doc, indent=2) + "\n")
+    elif previous:
+        print("  No catalog written; last good file left in place.")
+
+    allowlist = load_allowlist()
+    resolved_models = []
+    skipped = []
+    used_ids: set[str] = set()
+
+    for family in allowlist.get("families") or []:
+        pid = family.get("provider")
+        fid = family.get("family") or family.get("config_id")
+        config_id = family.get("config_id") or fid
+        if pid == "native":
+            resolved_models.append(
+                {
+                    "family": fid,
+                    "config_id": config_id,
+                    "provider": "native",
+                    "native": True,
+                    "model": (family.get("exact") or [config_id])[0],
+                    "name": "Grok 4.6 (native)",
+                }
+            )
+            continue
+        if pid not in PROVIDERS:
+            skipped.append({"family": fid, "reason": f"unknown provider {pid}"})
+            continue
+        p = PROVIDERS[pid]
+        if not keys.get(p["env_key"]):
+            skipped.append({"family": fid, "reason": f"no {p['env_key']}"})
+            continue
+        models = (providers_out.get(pid) or {}).get("models") or []
+        hit = resolve_family(family, models)
+        if not hit:
+            skipped.append({"family": fid, "reason": "not in catalog"})
+            continue
+        if config_id in used_ids:
+            skipped.append({"family": fid, "reason": f"duplicate config_id {config_id}"})
+            continue
+        used_ids.add(config_id)
+        display = hit.get("name") or hit["id"]
+        resolved_models.append(
+            {
+                "family": fid,
+                "config_id": config_id,
+                "provider": pid,
+                "native": False,
+                "model": hit["id"],
+                "name": f"{p['label']}: {display}",
+                "base_url": p["base_url"],
+                "env_key": p["env_key"],
+                "api_backend": "chat_completions",
+                "stream_tool_calls": False,
+                "context_length": hit.get("context_length"),
+                "created": hit.get("created") or 0,
+            }
+        )
+
+    resolved_doc = {
+        "updated": now_iso(),
+        "models": resolved_models,
+        "skipped": skipped,
+    }
+    atomic_write(RESOLVED_FILE, json.dumps(resolved_doc, indent=2) + "\n")
+
+    byok = [m for m in resolved_models if not m.get("native")]
+    print()
+    print(f"Resolved {len(byok)} BYOK + {len(resolved_models) - len(byok)} native → {RESOLVED_FILE}")
+    for m in resolved_models:
+        if m.get("native"):
+            print(f"  {m['config_id']:28} native (no [model.*] table)")
+        else:
+            print(f"  {m['config_id']:28} {m['model']}")
+    if skipped:
+        print("Skipped:")
+        for s in skipped:
+            print(f"  {s['family']}: {s['reason']}")
+    print()
+    print("This script does not edit ~/.grok/config.toml.")
+    print("Ask Grok Build to apply resolved.json into the grok-models-helper markers.")
+
+    if failed:
+        return 1
+    if not keys:
+        print("Add a key first: grok-models key", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_status() -> int:
+    keys = load_keys()
+    print("Keys (~/.config/grok-models/keys.env):")
+    for pid, p in PROVIDERS.items():
+        val = keys.get(p["env_key"])
+        print(f"  {p['label']:12} {p['env_key']:22} {mask(val) if val else 'NO KEY'}")
+    resolved = load_json(RESOLVED_FILE)
+    print()
+    if not resolved:
+        print("No resolved.json yet. Run: grok-models refresh")
+        return 0
+    print(f"Resolved ({resolved.get('updated', '?')}):")
+    for m in resolved.get("models") or []:
+        if m.get("native"):
+            print(f"  {m.get('config_id')}  native")
+        else:
+            print(f"  {m.get('config_id'):28} {m.get('model')}")
+    skipped = resolved.get("skipped") or []
+    if skipped:
+        print("Skipped:")
+        for s in skipped:
+            print(f"  {s.get('family')}: {s.get('reason')}")
+    return 0
+
+
+def prompt(msg: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    try:
+        raw = input(f"{msg}{suffix}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+    return raw or default
+
+
+def action_key(provider_id: str | None = None) -> int:
+    keys = load_keys()
+    ids = list(PROVIDERS)
+    if not provider_id:
+        print("\nProvider")
+        for i, pid in enumerate(ids, 1):
+            p = PROVIDERS[pid]
+            status = "key set" if keys.get(p["env_key"]) else "no key yet"
+            print(f"  {i}) {p['label']}  ({status})")
+        print("  0) cancel")
+        choice = prompt("Number")
+        if choice in {"0", ""}:
+            return 0
+        try:
+            provider_id = ids[int(choice) - 1]
+        except (ValueError, IndexError):
+            print("  Invalid choice.")
+            return 1
+    provider_id = provider_id.lower().strip()
+    aliases = {"or": "openrouter", "nw": "neuralwatt", "va": "venice"}
+    provider_id = aliases.get(provider_id, provider_id)
+    if provider_id not in PROVIDERS:
+        print(f"  Unknown provider {provider_id!r}. Use: openrouter, neuralwatt, venice")
+        return 1
+    p = PROVIDERS[provider_id]
+    existing = keys.get(p["env_key"], "")
+    print(f"\n{p['label']}")
+    print(f"  Get a key: {p['key_help']}")
+    print(f"  Stored as: {p['env_key']} in {KEYS_FILE}")
+    if existing:
+        print(f"  Current:   {mask(existing)}")
+        if prompt("Replace this key? (y/N)", "n").lower() not in {"y", "yes"}:
+            return 0
+    print("  (input is hidden; paste the key and press Enter. Nothing is logged.)")
+    try:
+        value = getpass.getpass("  key: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return 1
+    if not value:
+        return 1
+    keys[p["env_key"]] = value
+    write_keys(keys)
+    ensure_shell_hooks()
+    print(f"  Saved {p['env_key']} = {mask(value)}")
+    print("  Not written into config.toml.")
+    return cmd_refresh()
+
+
+def cmd_menu() -> int:
+    ensure_shell_hooks()
+    print()
+    print("Grok Models — keys + short allowlist (does not edit config.toml)")
+    print(f"Keys: {KEYS_FILE}")
+    print(f"Allowlist: {ALLOWLIST_FILE}")
+    print()
+    try:
+        cmd_refresh()
+    except KeyboardInterrupt:
+        print("  Catalog refresh cancelled.")
+    print()
+    while True:
+        print("  1) Add or replace an API key")
+        print("  2) Refresh catalogs / resolve allowlist")
+        print("  3) Status")
+        print("  0) Quit")
+        choice = prompt("\nWhat do you want to do")
+        print()
+        if choice in {"0", "q", "quit", ""}:
+            return 0
+        try:
+            {
+                "1": lambda: action_key(None),
+                "2": cmd_refresh,
+                "3": cmd_status,
+            }[choice]()
+        except KeyboardInterrupt:
+            print("\nCancelled that step.")
+        except KeyError:
+            print("  Unknown choice.")
+        print()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="grok-models",
+        description="Manage BYOK keys and a short resolved allowlist. Does not write config.toml.",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="",
+        help="env | refresh | key [provider] | status  (default: interactive)",
+    )
+    parser.add_argument("provider", nargs="?", help="openrouter | neuralwatt | venice")
+    args = parser.parse_args()
+    cmd = (args.command or "").lower()
+    if cmd == "env":
+        return cmd_env()
+    if cmd == "refresh":
+        return cmd_refresh()
+    if cmd in {"status", "list"}:
+        return cmd_status()
+    if cmd == "key":
+        if not sys.stdin.isatty():
+            print("grok-models key is interactive.", file=sys.stderr)
+            return 1
+        return action_key(args.provider)
+    if cmd in {"", "menu"}:
+        if not sys.stdin.isatty():
+            print("Run grok-models refresh, grok-models env, or grok-models status.", file=sys.stderr)
+            return 1
+        return cmd_menu()
+    parser.error(f"unknown command {args.command!r}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

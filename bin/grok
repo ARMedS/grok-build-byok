@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# PATH wrapper: load BYOK keys, then the real Grok Build binary.
+# SSH sessions and GUI launchers often do not inherit keys.env otherwise.
+set -euo pipefail
+REAL="${GROK_REAL:-$HOME/.grok/bin/grok}"
+if [[ ! -x "$REAL" ]]; then
+  echo "Could not find grok at $REAL" >&2
+  echo "Install Grok Build: curl -fsSL https://x.ai/cli/install.sh | bash" >&2
+  exit 1
+fi
+if [[ -x "$HOME/.local/bin/grok-models" ]]; then
+  eval "$("$HOME/.local/bin/grok-models" env 2>/dev/null)" || true
+fi
+exec "$REAL" "$@"
