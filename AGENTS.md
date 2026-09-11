@@ -4,8 +4,8 @@ You are Grok Build. Native default is **grok-4.6**. Other models are optional BY
 
 ## Two pieces (do not merge them)
 
-1. **`~/.local/bin/grok-models`** — keys, live catalog, short allowlist. **Never writes** `~/.grok/config.toml`.
-2. **You (Grok Build)** — own the region between `# BEGIN grok-models-helper` and `# END grok-models-helper` in `~/.grok/config.toml`.
+1. **`~/.local/bin/grok-models`** — keys, live catalog, picker, allowlist, and the validated managed model block.
+2. **The helper owns only** the region between `# BEGIN grok-models-helper` and `# END grok-models-helper` in `~/.grok/config.toml`; Grok Build owns the rest.
 
 Dumping a provider’s full `/v1/models` list into TOML caused `duplicate key` parse errors and made `grok` refuse to start. Keep about 16 unique `[model.NAME]` tables.
 
@@ -19,13 +19,14 @@ Dumping a provider’s full `/v1/models` list into TOML caused `duplicate key` p
 
 ```bash
 grok-models key openrouter   # or neuralwatt, venice
-grok-models refresh
+grok-models refresh          # refresh and apply selected models
+grok-models apply --dry-run
 grok-models status
 ```
 
-## After refresh — your job
+## Automatic model synchronization
 
-Read `~/.config/grok-models/resolved.json`. Emit only non-native entries as unique `[model.NAME]` tables (`env_key`, `api_backend = "chat_completions"`, `stream_tool_calls = false`). Delete matching `[model.*]` outside the markers. Leave `[cli]` / `[ui]` / `[models]` / `[mcp_servers]` alone. Keep `[models] default = "grok-4.6"`.
+Saving the picker or running `grok-models refresh` writes selected non-native entries as unique `[model.NAME]` tables inside the helper markers. The complete TOML is validated first and the previous config is backed up to `~/.grok/config.toml.bak-grok-models`. The `grok` wrapper reapplies the last successful selection before startup. The full provider catalog is never written to TOML, and `[cli]` / `[ui]` / `[models]` / `[mcp_servers]` remain outside the managed block. Keep `[models] default = "grok-4.6"`.
 
 Validate:
 

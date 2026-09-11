@@ -10,5 +10,9 @@ if [[ ! -x "$REAL" ]]; then
 fi
 if [[ -x "$HOME/.local/bin/grok-models" ]]; then
   eval "$("$HOME/.local/bin/grok-models" env 2>/dev/null)" || true
+  # Apply the last successful model selection without refreshing remote catalogs.
+  # If synchronization fails, preserve the existing config and still launch Grok.
+  "$HOME/.local/bin/grok-models" apply ||
+    echo "Warning: could not synchronize Grok model definitions; using existing config." >&2
 fi
 exec "$REAL" "$@"

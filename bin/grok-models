@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Grok Build BYOK helper: keys + live catalog + short allowlist.
 
-Never writes ~/.grok/config.toml (that is Grok Build's job from resolved.json).
+Synchronizes only the managed model block in ~/.grok/config.toml from resolved.json. The original config is backed up before replacement.
 Never prints a full API key except `grok-models env` (meant for eval).
 """
 
@@ -12,10 +12,14 @@ import getpass
 import json
 import os
 import re
+import select
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
+import termios
+import tty
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -23,6 +27,10 @@ from pathlib import Path
 
 HOME = Path.home()
 DIR = HOME / ".config" / "grok-models"
+GROK_CONFIG = HOME / ".grok" / "config.toml"
+GROK_CONFIG_BACKUP = HOME / ".grok" / "config.toml.bak-grok-models"
+MODEL_BEGIN = "# BEGIN grok-models-helper"
+MODEL_END = "# END grok-models-helper"
 KEYS_FILE = DIR / "keys.env"
 CATALOG_FILE = DIR / "catalog.json"
 RESOLVED_FILE = DIR / "resolved.json"
@@ -75,7 +83,7 @@ PROVIDERS = {
 # ~16 slots. Native grok is listed so the picker story is complete, but it
 # is not a BYOK table. Venice families resolve only after a key is stored.
 DEFAULT_ALLOWLIST = {
-    "version": 2,
+    "version": 3,
     "families": [
         {
             "family": "grok-4.6",
@@ -89,6 +97,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "neuralwatt",
             "exact": ["deepseek-v4-flash"],
             "prefix": ["deepseek-v4-flash"],
+            "auto": True,
         },
         {
             "family": "glm-5.3",
@@ -96,6 +105,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "neuralwatt",
             "exact": ["glm-5.3"],
             "prefix": ["glm-5.3", "glm-5."],
+            "auto": True,
         },
         {
             "family": "kimi-k3",
@@ -103,6 +113,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "neuralwatt",
             "exact": ["kimi-k3"],
             "prefix": ["kimi-k3"],
+            "auto": True,
         },
         {
             "family": "kimi-k2.7-code",
@@ -110,6 +121,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "neuralwatt",
             "exact": ["kimi-k2.7-code"],
             "prefix": ["kimi-k2.7-code", "kimi-k2"],
+            "auto": True,
         },
         {
             "family": "claude-fable",
@@ -118,6 +130,7 @@ DEFAULT_ALLOWLIST = {
             "exact": ["anthropic/claude-fable-5.1"],
             "fallback": ["~anthropic/claude-fable-latest"],
             "prefix": ["anthropic/claude-fable-"],
+            "auto": True,
         },
         {
             "family": "claude-opus",
@@ -126,6 +139,7 @@ DEFAULT_ALLOWLIST = {
             "exact": ["anthropic/claude-opus-5"],
             "fallback": ["~anthropic/claude-opus-latest"],
             "prefix": ["anthropic/claude-opus-"],
+            "auto": True,
         },
         {
             "family": "gemini-flash",
@@ -134,6 +148,7 @@ DEFAULT_ALLOWLIST = {
             "exact": ["google/gemini-3.8-flash"],
             "fallback": ["~google/gemini-flash-latest"],
             "prefix": ["google/gemini-3.", "google/gemini-"],
+            "auto": True,
         },
         {
             "family": "muse-spark",
@@ -141,6 +156,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "openrouter",
             "exact": ["meta/muse-spark-1.3"],
             "prefix": ["meta/muse-spark-1.3"],
+            "auto": True,
         },
         {
             "family": "muse-spark-contributor",
@@ -148,6 +164,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "openrouter",
             "exact": ["meta/muse-spark-1.3-contributor"],
             "prefix": ["meta/muse-spark-1.3-contributor"],
+            "auto": True,
         },
         {
             "family": "openrouter-auto",
@@ -155,6 +172,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "openrouter",
             "exact": ["openrouter/auto"],
             "prefix": ["openrouter/auto"],
+            "auto": True,
         },
         {
             "family": "gpt-sol",
@@ -162,6 +180,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "openrouter",
             "exact": ["openai/gpt-5.6-sol"],
             "prefix": ["openai/gpt-5.6-sol"],
+            "auto": True,
         },
         {
             "family": "gpt-luna",
@@ -169,6 +188,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "openrouter",
             "exact": ["openai/gpt-5.6-luna"],
             "prefix": ["openai/gpt-5.6-luna"],
+            "auto": True,
         },
         {
             "family": "venice-deepseek-v4-flash",
@@ -176,6 +196,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "venice",
             "exact": ["deepseek-v4-flash-0731"],
             "prefix": ["deepseek-v4-flash"],
+            "auto": True,
         },
         {
             "family": "venice-uncensored",
@@ -183,6 +204,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "venice",
             "exact": ["venice-uncensored-1-2"],
             "prefix": ["venice-uncensored-1"],
+            "auto": True,
         },
         {
             "family": "venice-uncensored-rp",
@@ -190,6 +212,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "venice",
             "exact": ["venice-uncensored-role-play"],
             "prefix": ["venice-uncensored-role-play"],
+            "auto": True,
         },
         {
             "family": "venice-gemini-flash",
@@ -197,6 +220,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "venice",
             "exact": ["gemini-3-8-flash"],
             "prefix": ["gemini-3-8-flash", "gemini-3-"],
+            "auto": True,
         },
         {
             "family": "venice-muse-spark",
@@ -204,6 +228,7 @@ DEFAULT_ALLOWLIST = {
             "provider": "venice",
             "exact": ["muse-spark-1-3", "meta-muse-spark-1-3"],
             "prefix": ["muse-spark", "meta-muse-spark"],
+            "auto": True,
         },
     ],
 }
@@ -352,6 +377,16 @@ def load_json(path: Path) -> dict | None:
 def load_allowlist() -> dict:
     data = load_json(ALLOWLIST_FILE)
     if isinstance(data, dict) and isinstance(data.get("families"), list) and data["families"]:
+        # v2 -> v3 migration: add explicit auto flag (default auto-update family).
+        if int(data.get("version") or 2) < 3:
+            migrated = False
+            for fam in data["families"]:
+                if "auto" not in fam:
+                    fam["auto"] = True
+                    migrated = True
+            if migrated:
+                data["version"] = 3
+                atomic_write(ALLOWLIST_FILE, json.dumps(data, indent=2) + "\n")
         return data
     atomic_write(ALLOWLIST_FILE, json.dumps(DEFAULT_ALLOWLIST, indent=2) + "\n")
     return DEFAULT_ALLOWLIST
@@ -478,6 +513,103 @@ def resolve_family(family: dict, catalog: list[dict]) -> dict | None:
     return None
 
 
+def _resolved_row(provider: dict, family: dict, fid: str, config_id: str, hit: dict) -> dict:
+    display = hit.get("name") or hit["id"]
+    return {
+        "family": fid,
+        "config_id": config_id,
+        "provider": family.get("provider"),
+        "native": False,
+        "model": hit["id"],
+        "name": f"{provider['label']}: {display}",
+        "base_url": provider["base_url"],
+        "env_key": provider["env_key"],
+        "api_backend": "chat_completions",
+        "stream_tool_calls": False,
+        "context_length": hit.get("context_length"),
+        "created": hit.get("created") or 0,
+    }
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def render_model_block(resolved: dict) -> str:
+    lines = [MODEL_BEGIN]
+    seen: set[str] = set()
+    for model in resolved.get("models") or []:
+        if model.get("native"):
+            continue
+        config_id = str(model.get("config_id") or "").strip()
+        if not config_id or config_id in seen:
+            continue
+        seen.add(config_id)
+        lines.extend([
+            f"[model.{config_id}]",
+            f"model = {_toml_string(model.get('model') or '')}",
+            f"base_url = {_toml_string(model.get('base_url') or '')}",
+            f"name = {_toml_string(model.get('name') or config_id)}",
+            f"env_key = {_toml_string(model.get('env_key') or '')}",
+            f"api_backend = {_toml_string(model.get('api_backend') or 'chat_completions')}",
+            f"context_window = {int(model.get('context_length') or 200000)}",
+            f"stream_tool_calls = {'true' if model.get('stream_tool_calls') is not False else 'false'}",
+            "",
+        ])
+    lines.append(MODEL_END)
+    return "\n".join(lines) + "\n"
+
+
+def _replace_managed_models(config_text: str, model_block: str) -> str:
+    begin = config_text.find(MODEL_BEGIN)
+    end = config_text.find(MODEL_END)
+    if begin >= 0 or end >= 0:
+        if begin < 0 or end < begin:
+            raise ValueError("config.toml has incomplete grok-models-helper markers")
+        end += len(MODEL_END)
+        return config_text[:begin] + model_block.rstrip("\n") + config_text[end:]
+
+    # One-time migration for this host's existing layout: custom model tables
+    # are the final tables in config.toml. Preserve everything before them.
+    match = re.search(r"(?m)^\[model\.", config_text)
+    if not match:
+        separator = "\n" if config_text.endswith("\n") else "\n\n"
+        return config_text + separator + model_block
+    prefix = config_text[:match.start()].rstrip() + "\n\n"
+    return prefix + model_block
+
+
+def apply_resolved(dry_run: bool = False) -> int:
+    resolved = load_json(RESOLVED_FILE)
+    if not isinstance(resolved, dict) or not isinstance(resolved.get("models"), list):
+        print(f"No usable {RESOLVED_FILE}; run grok-models refresh first.", file=sys.stderr)
+        return 1
+    if not GROK_CONFIG.is_file():
+        print(f"Grok config not found: {GROK_CONFIG}", file=sys.stderr)
+        return 1
+    try:
+        current = GROK_CONFIG.read_text(encoding="utf-8")
+        candidate = _replace_managed_models(current, render_model_block(resolved))
+        import tomllib
+        tomllib.loads(candidate)
+    except Exception as exc:
+        print(f"Refusing to update config.toml: {exc}", file=sys.stderr)
+        return 1
+    if dry_run:
+        print(f"Would update managed model block in {GROK_CONFIG}")
+        print(f"  models: {sum(1 for m in resolved['models'] if not m.get('native'))} BYOK")
+        return 0
+    try:
+        mode = GROK_CONFIG.stat().st_mode & 0o777
+        shutil.copy2(GROK_CONFIG, GROK_CONFIG_BACKUP)
+        atomic_write(GROK_CONFIG, candidate, mode)
+    except Exception as exc:
+        print(f"Could not update config.toml: {exc}", file=sys.stderr)
+        return 1
+    print(f"Applied {sum(1 for m in resolved['models'] if not m.get('native'))} BYOK models to {GROK_CONFIG}")
+    return 0
+
+
 def cmd_refresh() -> int:
     keys = load_keys()
     previous = load_json(CATALOG_FILE) or {}
@@ -487,7 +619,7 @@ def cmd_refresh() -> int:
     failed: list[str] = []
     fetched_any = False
 
-    print("Refreshing provider catalogs (allowlist only; no TOML writes)…")
+    print("Refreshing provider catalogs and resolving selected models…")
     for pid, p in PROVIDERS.items():
         key = keys.get(p["env_key"])
         if not key:
@@ -558,6 +690,32 @@ def cmd_refresh() -> int:
             skipped.append({"family": fid, "reason": f"no {p['env_key']}"})
             continue
         models = (providers_out.get(pid) or {}).get("models") or []
+        is_pinned = family.get("auto") is False
+        if is_pinned:
+            # Pinned (manual) entry: resolve each exact id present in the catalog.
+            by_id = {m["id"]: m for m in models}
+            added_any = False
+            pin_ids = list(family.get("exact") or [])
+            if not pin_ids:
+                skipped.append({"family": fid, "reason": "pinned entry has no exact ids"})
+                continue
+            for idx, mid in enumerate(pin_ids):
+                hit = by_id.get(mid)
+                if not hit:
+                    skipped.append({"family": fid, "reason": f"{mid} not in catalog"})
+                    continue
+                sub_id = config_id if len(pin_ids) == 1 else f"{config_id}.{idx}"
+                if sub_id in used_ids:
+                    skipped.append({"family": fid, "reason": f"duplicate config_id {sub_id}"})
+                    continue
+                used_ids.add(sub_id)
+                added_any = True
+                resolved_models.append(_resolved_row(p, family, fid, sub_id, hit))
+            if not added_any:
+                # Already reported per-id; no extra global message needed.
+                pass
+            continue
+        # Auto-update family: resolve newest matching variant (existing semantics).
         hit = resolve_family(family, models)
         if not hit:
             skipped.append({"family": fid, "reason": "not in catalog"})
@@ -566,23 +724,7 @@ def cmd_refresh() -> int:
             skipped.append({"family": fid, "reason": f"duplicate config_id {config_id}"})
             continue
         used_ids.add(config_id)
-        display = hit.get("name") or hit["id"]
-        resolved_models.append(
-            {
-                "family": fid,
-                "config_id": config_id,
-                "provider": pid,
-                "native": False,
-                "model": hit["id"],
-                "name": f"{p['label']}: {display}",
-                "base_url": p["base_url"],
-                "env_key": p["env_key"],
-                "api_backend": "chat_completions",
-                "stream_tool_calls": False,
-                "context_length": hit.get("context_length"),
-                "created": hit.get("created") or 0,
-            }
-        )
+        resolved_models.append(_resolved_row(p, family, fid, config_id, hit))
 
     resolved_doc = {
         "updated": now_iso(),
@@ -604,8 +746,7 @@ def cmd_refresh() -> int:
         for s in skipped:
             print(f"  {s['family']}: {s['reason']}")
     print()
-    print("This script does not edit ~/.grok/config.toml.")
-    print("Ask Grok Build to apply resolved.json into the grok-models-helper markers.")
+    print("The managed model block is synchronized when the picker saves, refresh completes, or grok starts.")
 
     if failed:
         return 1
@@ -613,6 +754,11 @@ def cmd_refresh() -> int:
         print("Add a key first: grok-models key", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_refresh_and_apply() -> int:
+    result = cmd_refresh()
+    return apply_resolved() if result == 0 else result
 
 
 def cmd_status() -> int:
@@ -695,14 +841,463 @@ def action_key(provider_id: str | None = None) -> int:
     write_keys(keys)
     ensure_shell_hooks()
     print(f"  Saved {p['env_key']} = {mask(value)}")
-    print("  Not written into config.toml.")
-    return cmd_refresh()
+    print("  Refreshing catalogs and synchronizing the managed model block.")
+    return cmd_refresh_and_apply()
+
+
+# ---------------------------------------------------------------------------
+# Interactive model picker (raw terminal TUI)
+# ---------------------------------------------------------------------------
+
+_ESC = b"\x1b"
+
+
+def _term_size() -> tuple[int, int]:
+    try:
+        return os.get_terminal_size().columns, os.get_terminal_size().lines
+    except OSError:
+        return 80, 24
+
+
+def _nowrap(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)] + "…"
+
+
+def slugify_model(model_id: str) -> str:
+    s = model_id.lower().replace("/", "-").replace(".", "-")
+    s = re.sub(r"[^a-z0-9_-]+", "-", s).strip("-")
+    return s or "model"
+
+
+def _gen_config_id(provider_id: str, model_id: str, existing: set[str]) -> str:
+    base = f"{PROVIDERS[provider_id]['prefix']}-{slugify_model(model_id)}"
+    cand = base
+    n = 1
+    while cand in existing:
+        n += 1
+        cand = f"{base}-{n}"
+    return cand
+
+
+class ModelPicker:
+    """Full-catalog checkbox picker for one BYOK provider at a time."""
+
+    def __init__(self, allowlist: dict, catalog: dict, start_provider: str | None = None):
+        self.allowlist = allowlist
+        self.catalog = catalog
+        fams = allowlist.get("families") or []
+        idx = list(PROVIDERS).index(start_provider) if start_provider in PROVIDERS else 0
+        self.provider_idx = idx
+        # auto family templates: key -> family dict (defaults + any custom in allowlist)
+        self.auto_tpl: dict[str, dict[str, dict]] = {}
+        # auto family keys currently active (present in the allowlist)
+        self.auto_active: dict[str, set[str]] = {}
+        # pinned model-id -> entry (auto False) keyed by provider
+        self.pinned_by_pid: dict[str, dict[str, dict]] = {}
+        for fam in fams:
+            pid = fam.get("provider")
+            if pid == "native" or pid not in PROVIDERS:
+                continue
+            if fam.get("auto") is False:
+                self.pinned_by_pid.setdefault(pid, {})
+                for mid in fam.get("exact") or []:
+                    self.pinned_by_pid[pid][mid] = fam
+            else:
+                key = fam.get("config_id") or fam.get("family")
+                self.auto_tpl.setdefault(pid, {})[key] = dict(fam)
+                self.auto_active.setdefault(pid, set()).add(key)
+        # default auto templates available to (re)enable
+        for fam in DEFAULT_ALLOWLIST.get("families") or []:
+            pid = fam.get("provider")
+            if pid == "native" or pid not in PROVIDERS or fam.get("auto") is False:
+                continue
+            key = fam.get("config_id") or fam.get("family")
+            self.auto_tpl.setdefault(pid, {})
+            if key not in self.auto_tpl[pid]:
+                self.auto_tpl[pid][key] = dict(fam)
+        self.search = ""
+        self._filtering = False
+        self._last_action = "quit"
+        self.cursor = 0
+        self.scroll = 0
+        self.rows: list[tuple] = []  # (section, key)
+        self.row_y: list[tuple] = []  # (display_y, section, key)
+
+    # -- state queries -----------------------------------------------------
+    def pid(self) -> str:
+        return list(PROVIDERS)[self.provider_idx]
+
+    def provider(self) -> dict:
+        return PROVIDERS[self.pid()]
+
+    def models(self) -> list[dict]:
+        return (self.catalog.get("providers") or {}).get(self.pid(), {}).get("models") or []
+
+    def auto_rows(self) -> list[dict]:
+        pid = self.pid()
+        return list((self.auto_tpl.get(pid) or {}).values())
+
+    def auto_on(self, key: str) -> bool:
+        return key in (self.auto_active.get(self.pid()) or set())
+
+    def _rebuild_rows(self) -> None:
+        pid = self.pid()
+        rows: list[tuple] = []
+        for fam in self.auto_rows():
+            rows.append(("auto", fam.get("config_id") or fam.get("family")))
+        q = self.search.strip().lower()
+        for m in self.models():
+            if q and q not in m["id"].lower() and q not in (m.get("name") or "").lower():
+                continue
+            rows.append(("model", m["id"]))
+        self.rows = rows
+        if self.cursor >= len(rows):
+            self.cursor = max(0, len(rows) - 1)
+        if self.cursor < 0:
+            self.cursor = 0
+
+    def is_row_checked(self, section: str, key: str) -> bool:
+        if section == "auto":
+            return self.auto_on(key)
+        return key in (self.pinned_by_pid.get(self.pid()) or {})
+
+    def toggle_at(self, index: int) -> None:
+        if not (0 <= index < len(self.rows)):
+            return
+        section, key = self.rows[index]
+        pid = self.pid()
+        if section == "auto":
+            active = self.auto_active.setdefault(pid, set())
+            if key in active:
+                active.discard(key)
+            else:
+                # add template (default or preserved custom) to active set
+                if key not in self.auto_tpl.setdefault(pid, {}):
+                    self.auto_tpl[pid][key] = {
+                        "family": key,
+                        "config_id": key,
+                        "provider": pid,
+                        "prefix": [],
+                        "auto": True,
+                    }
+                active.add(key)
+        else:  # model (pinned)
+            pins = self.pinned_by_pid.setdefault(pid, {})
+            if key in pins:
+                del pins[key]
+            else:
+                existing = {f.get("config_id") for f in self.allowlist.get("families") or []}
+                pins[key] = {
+                    "family": key,
+                    "config_id": _gen_config_id(pid, key, existing),
+                    "provider": pid,
+                    "exact": [key],
+                    "auto": False,
+                }
+
+    # -- rendering ----------------------------------------------------------
+    def _auto_resolved(self, fam: dict) -> str:
+        models = (self.catalog.get("providers") or {}).get(self.pid(), {}).get("models") or []
+        hit = resolve_family(fam, models)
+        return hit["id"] if hit else ""
+
+    def build_screen(self) -> tuple[list[str], list[tuple]]:
+        """Return (lines, clickable) where clickable = (display_y, section, key)."""
+        cols, lines = _term_size()
+        pid = self.pid()
+        p = self.provider()
+        self._rebuild_rows()
+
+        out: list[str] = []
+        clickable: list[tuple] = []
+
+        def emit(text: str, row: tuple | None = None):
+            out.append(text)
+            if row is not None:
+                if (len(out) - 1, row[0], row[1]) not in clickable:
+                    clickable.append((len(out) - 1, row[0], row[1]))
+
+        n_auto = len(self.auto_rows())
+        n_auto_on = sum(1 for key in (self.auto_active.get(pid) or set()) if key in (self.auto_tpl.get(pid) or {}))
+        n_model = len(self.models())
+        n_pinned = len(self.pinned_by_pid.get(pid) or {})
+
+        emit(f"  Grok Models — model selection          provider: {p['label']}   "
+             f"({n_auto_on} auto family / {n_pinned} pinned)")
+        emit("  [Tab/←/→] provider   [↑/↓] move   [Space] toggle   [Enter] save")
+        emit("  [/] filter   [Esc/q] cancel")
+
+        emit(f"  Auto-updating families  ({n_auto_on}/{n_auto} on):")
+        for fam in self.auto_rows():
+            key = fam.get("config_id") or fam.get("family")
+            on = self.auto_on(key)
+            box = "[x]" if on else "[ ]"
+            resolved = self._auto_resolved(fam)
+            label = f"{key}  → {resolved}" if resolved else key
+            emit(f"  {box} {_nowrap(label, cols - 8)}", ("auto", key))
+
+        shown = [s for s in self.rows if s[0] == "model"]
+        if self.search:
+            emit(f"  Individual models  (filter: {self.search!r})  {len(shown)}/{n_model}:")
+        else:
+            emit(f"  Individual models  ({n_model}):")
+
+        model_indices = [i for i, row in enumerate(self.rows) if row[0] == "model"]
+        model_budget = max(1, lines - len(out) - 2)
+        if self.cursor in model_indices:
+            cursor_model = model_indices.index(self.cursor)
+            if cursor_model < self.scroll:
+                self.scroll = cursor_model
+            elif cursor_model >= self.scroll + model_budget:
+                self.scroll = cursor_model - model_budget + 1
+        max_scroll = max(0, len(model_indices) - model_budget)
+        self.scroll = min(max(0, self.scroll), max_scroll)
+
+        for i in model_indices[self.scroll : self.scroll + model_budget]:
+            key = self.rows[i][1]
+            on = key in (self.pinned_by_pid.get(pid) or {})
+            box = "[x]" if on else "[ ]"
+            emit(f"  {box} {_nowrap(key, cols - 8)}", ("model", key))
+
+        emit("")
+        emit("  [Tab/←/→] provider   [↑/↓] move   [Space] toggle   [Enter] save   [Esc/q] cancel")
+        return out, clickable
+
+    def draw(self) -> None:
+        sys.stdout.write("\x1b[H\x1b[2J")
+        lines, clickable = self.build_screen()
+        self.row_y = clickable
+        # highlight cursor row (reverse video)
+        if self.rows and 0 <= self.cursor < len(self.rows):
+            section, key = self.rows[self.cursor]
+            for y, s, k in clickable:
+                if s == section and k == key:
+                    lines[y] = "\x1b[7m" + lines[y] + "\x1b[0m"
+                    break
+        sys.stdout.write("\r\n".join(lines))
+        sys.stdout.write("\x1b[0m")
+        sys.stdout.flush()
+
+    def enter(self) -> None:
+        """Run the picker in keyboard-only cbreak mode.
+
+        Mouse reporting is deliberately disabled: terminal mouse escape sequences
+        can interfere with keyboard input on some terminals.
+        """
+        self._last_action = "quit"
+        old = termios.tcgetattr(sys.stdin.fileno())
+        try:
+            self.draw()
+            tty.setcbreak(sys.stdin.fileno())
+            self._loop()
+        finally:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old)
+            sys.stdout.write("\x1b[0m\x1b[2J\x1b[H")
+            sys.stdout.flush()
+
+    def _loop(self) -> None:
+        buf = b""
+        while True:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if ready:
+                try:
+                    buf += os.read(sys.stdin.fileno(), 128)
+                except OSError:
+                    continue
+            if not buf:
+                continue
+            decoded = self._decode(buf)
+            if decoded is None:
+                continue
+            key, consumed = decoded
+            buf = buf[consumed:]
+            action = self._handle(key)
+            self.draw()
+            if action == "quit":
+                self._last_action = "quit"
+                return
+            if action == "saved":
+                self._last_action = "saved"
+                return
+
+    # -- keyboard decoding --------------------------------------------------
+    def _decode(self, buf: bytes):
+        if buf.startswith(_ESC):
+            if len(buf) == 1:
+                # Escape is also the first byte of arrow sequences. Give a
+                # following sequence a short chance to arrive.
+                ready, _, _ = select.select([sys.stdin], [], [], 0.08)
+                if ready:
+                    try:
+                        return self._decode(buf + os.read(sys.stdin.fileno(), 8))
+                    except OSError:
+                        pass
+                return (("quit",), 1)
+            sequences = {
+                b"\x1b[A": "up", b"\x1bOA": "up",
+                b"\x1b[B": "down", b"\x1bOB": "down",
+                b"\x1b[C": "right", b"\x1bOC": "right",
+                b"\x1b[D": "left", b"\x1bOD": "left",
+            }
+            for sequence, key in sequences.items():
+                if buf.startswith(sequence):
+                    return ((key,), len(sequence))
+            # Ignore unknown escape sequences one byte at a time, preserving
+            # later keyboard input rather than wedging the picker.
+            return (("quit",), 1)
+        return ((buf[:1],), 1)
+
+    def _handle(self, key: tuple):
+        kind = key[0]
+        if kind == "quit":  # Esc
+            if self._filtering:
+                self._filtering = False
+                return
+            return "quit"
+        if kind == "up":
+            if self.cursor > 0:
+                self.cursor -= 1
+            return
+        if kind == "down":
+            if self.cursor < len(self.rows) - 1:
+                self.cursor += 1
+            return
+        if kind in ("right", "left") or kind == b"\t":
+            if kind == "left":
+                self.provider_idx = (self.provider_idx - 1) % len(PROVIDERS)
+            else:
+                self.provider_idx = (self.provider_idx + 1) % len(PROVIDERS)
+            self._reset_view()
+            return
+        if kind == "mouse":
+            y = key[1]
+            for dy, s, k in self.row_y:
+                if dy == y:
+                    for idx, r in enumerate(self.rows):
+                        if r[0] == s and r[1] == k:
+                            self.toggle_at(idx)
+                            return
+            return
+        if kind in (b" ",):
+            self.toggle_at(self.cursor)
+            return
+        if kind in (b"\r", b"\n"):
+            return "saved"
+        if kind in (b"/",):
+            self._filtering = True
+            return
+        if kind == b"\x7f":  # backspace
+            if self._filtering:
+                self.search = self.search[:-1]
+            return
+        if isinstance(kind, bytes) and kind and kind.isascii():
+            if self._filtering:
+                ch = kind.decode("ascii", "replace")
+                if ch.isprintable():
+                    self.search += ch
+                return
+            if kind in (b"q", b"Q"):
+                return "quit"
+        return
+
+    def _reset_view(self):
+        self.search = ""
+        self.cursor = 0
+        self.scroll = 0
+
+    # -- persistence ---------------------------------------------------------
+    def apply(self) -> dict:
+        """Rebuild allowlist from the picker state. Returns the new allowlist doc."""
+        fams = []
+        for fam in self.allowlist.get("families") or []:
+            pid = fam.get("provider")
+            if pid == "native" or pid not in PROVIDERS:
+                fams.append(fam)
+                continue
+            # pinned and auto BYOK entries are rebuilt from picker state below
+        # active auto families (template preserves custom patterns where present)
+        for pid, active in self.auto_active.items():
+            tpls = self.auto_tpl.get(pid) or {}
+            for key in active:
+                fam = tpls.get(key) or {
+                    "family": key,
+                    "config_id": key,
+                    "provider": pid,
+                    "prefix": [],
+                    "auto": True,
+                }
+                fams.append(dict(fam))
+        # pinned entries
+        existing_ids = {f.get("config_id") for f in fams}
+        for pid, pins in self.pinned_by_pid.items():
+            for mid, fam in pins.items():
+                cfg = fam.get("config_id")
+                if cfg in existing_ids:
+                    base = f"{PROVIDERS[pid]['prefix']}-{slugify_model(mid)}"
+                    cfg = base
+                    n = 1
+                    while cfg in existing_ids:
+                        n += 1
+                        cfg = f"{base}-{n}"
+                existing_ids.add(cfg)
+                fams.append({
+                    "family": mid,
+                    "config_id": cfg,
+                    "provider": pid,
+                    "exact": [mid],
+                    "auto": False,
+                })
+        return {"version": 3, "families": fams}
+
+
+def cmd_pick(provider_arg: str | None = None) -> int:
+    """Interactive model picker. Returns 0 on save, 1 on quit/cancel."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("grok-models pick is interactive; run it in a terminal.", file=sys.stderr)
+        return 2
+    allowlist = load_allowlist()
+    catalog = load_json(CATALOG_FILE) or {}
+    start = None
+    if provider_arg:
+        a = provider_arg.lower().strip()
+        aliases = {"or": "openrouter", "nw": "neuralwatt", "va": "venice"}
+        start = aliases.get(a, a)
+        if start not in PROVIDERS:
+            print(f"  Unknown provider {provider_arg!r}. Use: openrouter, neuralwatt, venice")
+            return 1
+    if not catalog.get("providers"):
+        print("  No catalog yet. Run `grok-models refresh` first to fetch provider models.")
+        return 1
+    picker = ModelPicker(allowlist, catalog, start)
+    try:
+        picker.enter()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return 1
+    # enter() returns us here after a quit/saved action
+    result = picker._last_action
+    if result != "saved":
+        print("\nNo changes saved.")
+        return 1
+    new_allowlist = picker.apply()
+    atomic_write(ALLOWLIST_FILE, json.dumps(new_allowlist, indent=2) + "\n")
+    print(f"\nSaved selection → {ALLOWLIST_FILE}")
+    print("Re-resolving allowlist into resolved.json…")
+    print()
+    try:
+        result = cmd_refresh()
+        return apply_resolved() if result == 0 else result
+    except KeyboardInterrupt:
+        print("  Catalog refresh cancelled.")
+        return 1
 
 
 def cmd_menu() -> int:
     ensure_shell_hooks()
     print()
-    print("Grok Models — keys + short allowlist (does not edit config.toml)")
+    print("Grok Models — keys + model selection (syncs managed config.toml models)")
     print(f"Keys: {KEYS_FILE}")
     print(f"Allowlist: {ALLOWLIST_FILE}")
     print()
@@ -712,9 +1307,10 @@ def cmd_menu() -> int:
         print("  Catalog refresh cancelled.")
     print()
     while True:
-        print("  1) Add or replace an API key")
-        print("  2) Refresh catalogs / resolve allowlist")
-        print("  3) Status")
+        print("  1) Refresh catalogs / resolve allowlist")
+        print("  2) Select models … (checkbox picker)")
+        print("  3) Add or replace an API key")
+        print("  4) Status")
         print("  0) Quit")
         choice = prompt("\nWhat do you want to do")
         print()
@@ -722,9 +1318,10 @@ def cmd_menu() -> int:
             return 0
         try:
             {
-                "1": lambda: action_key(None),
-                "2": cmd_refresh,
-                "3": cmd_status,
+                "1": cmd_refresh_and_apply,
+                "2": lambda: cmd_pick(None),
+                "3": lambda: action_key(None),
+                "4": cmd_status,
             }[choice]()
         except KeyboardInterrupt:
             print("\nCancelled that step.")
@@ -736,23 +1333,29 @@ def cmd_menu() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="grok-models",
-        description="Manage BYOK keys and a short resolved allowlist. Does not write config.toml.",
+        description="Manage BYOK keys, selected models, and the managed config.toml model block.",
     )
     parser.add_argument(
         "command",
         nargs="?",
         default="",
-        help="env | refresh | key [provider] | status  (default: interactive)",
+        help="env | refresh | apply [--dry-run] | pick [provider] | key [provider] | status  (default: interactive)",
     )
     parser.add_argument("provider", nargs="?", help="openrouter | neuralwatt | venice")
+    parser.add_argument("--dry-run", action="store_true", help="show an apply operation without writing config.toml")
     args = parser.parse_args()
     cmd = (args.command or "").lower()
     if cmd == "env":
         return cmd_env()
     if cmd == "refresh":
-        return cmd_refresh()
+        result = cmd_refresh()
+        return apply_resolved() if result == 0 else result
+    if cmd == "apply":
+        return apply_resolved(args.dry_run)
     if cmd in {"status", "list"}:
         return cmd_status()
+    if cmd in {"pick", "select", "select-models"}:
+        return cmd_pick(args.provider)
     if cmd == "key":
         if not sys.stdin.isatty():
             print("grok-models key is interactive.", file=sys.stderr)
@@ -760,7 +1363,7 @@ def main() -> int:
         return action_key(args.provider)
     if cmd in {"", "menu"}:
         if not sys.stdin.isatty():
-            print("Run grok-models refresh, grok-models env, or grok-models status.", file=sys.stderr)
+            print("Run grok-models refresh, grok-models pick, grok-models env, or grok-models status.", file=sys.stderr)
             return 1
         return cmd_menu()
     parser.error(f"unknown command {args.command!r}")

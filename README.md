@@ -4,6 +4,20 @@ Bootstrap **Grok Build** on a new Linux host with a short pickable model list (O
 
 Private repo. Working helper scripts, not a screenshot of a desktop.
 
+## Automatic model synchronization
+
+The picker writes the selected models to `allowlist.json`, refresh resolves them to `resolved.json`, and the helper replaces only the region between `# BEGIN grok-models-helper` and `# END grok-models-helper` in `~/.grok/config.toml`. The complete candidate TOML is parsed before replacement, and the previous config is backed up to `~/.grok/config.toml.bak-grok-models`.
+
+The wrapper reapplies the last successful `resolved.json` before every Grok launch. Startup does not contact provider APIs; run `grok-models refresh` when a new catalog is needed. The full provider catalog is never written to TOML.
+
+Useful commands:
+
+```bash
+grok-models apply --dry-run
+grok-models apply
+grok-models refresh
+```
+
 ## On the new VPS
 
 ```bash
@@ -22,22 +36,23 @@ grok-models key openrouter
 grok-models key neuralwatt
 grok-models key venice
 
-# 4. Resolve the allowlist (does not write TOML)
-grok-models refresh
+# 4. Choose models and save; the picker applies the managed TOML block
+grok-models
+# Or select directly:
+# grok-models pick openrouter
 
-# 5. Start Grok and ask it to apply ~/.config/grok-models/resolved.json
-#    into the grok-models-helper markers. Then: new session, /model
+# 5. Start Grok; the wrapper reapplies the last resolved selection automatically
 grok
 ```
 
-Put `~/.local/bin` on `PATH` (the installer appends this to `~/.bashrc`). The `grok` wrapper there loads keys then execs `~/.grok/bin/grok`.
+Put `~/.local/bin` on `PATH` (the installer appends this to `~/.bashrc`). The `grok` wrapper there loads keys, applies the last successful `resolved.json` selection to the managed config block, then execs `~/.grok/bin/grok`. It does not refresh remote catalogs during startup.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `bin/grok-models` | Keys, catalog, allowlist. Never writes TOML. |
-| `bin/grok` | `eval "$(grok-models env)"` then real grok |
+| `bin/grok-models` | Keys, catalog, allowlist, picker, and the validated managed TOML model block. |
+| `bin/grok` | Loads keys, applies the last resolved selection, then launches real Grok |
 | `config/allowlist.json` | ~16 families |
 | `config/config.toml.example` | Default `grok-4.6` + empty helper markers |
 | `AGENTS.md` | Standing rules for Grok on the new host |
