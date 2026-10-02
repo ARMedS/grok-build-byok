@@ -1,0 +1,76 @@
+Grok Build — currently selected models
+============================================================
+Resolved: 2026-10-01T09:18:39Z
+Count:    20
+
+[native]
+  - grok-4.6
+      Grok 4.6 (native)
+
+[neuralwatt]
+  - glm-5.3-flash
+      Neuralwatt: GLM-5.3 Flash
+      context: 1,048,560
+  - glm-5.3-flash-flex
+      Neuralwatt: GLM-5.3 Flash (flex)
+      context: 1,048,560
+  - deepseek-v4.1-flash-flex
+      Neuralwatt: DeepSeek V4.1 Flash (flex)
+      context: 1,048,560
+  - deepseek-v4.1-flash
+      Neuralwatt: DeepSeek V4.1 Flash
+      context: 1,048,560
+  - mimo-v2.6-pro
+      Neuralwatt: MiMo-V2.6-Pro
+      context: 1,048,560
+  - qwen-3.8-27b
+      Neuralwatt: Qwen 3.8 27B
+      context: 262,128
+
+[openrouter]
+  - google/gemini-3.8-flash
+      OpenRouter: Google: Gemini 3.8 Flash
+      context: 1,048,576
+  - openrouter/auto
+      OpenRouter: Auto Router
+      context: 2,000,000
+  - deepseek/deepseek-v4.1-flash
+      OpenRouter: DeepSeek: DeepSeek V4.1 Flash
+      context: 1,048,576
+  - openai/gpt-6-luna
+      OpenRouter: OpenAI: GPT-6 Luna
+      context: 1,050,000
+  - stealth/space-bunny-alpha
+      OpenRouter: Space Bunny Alpha
+      context: 1,000,000
+  - anthropic/claude-opus-5.5
+      OpenRouter: Anthropic: Claude Opus 5.5
+      context: 1,000,000
+  - openai/gpt-6.1-sol
+      OpenRouter: OpenAI: GPT-6.1 Sol
+      context: 1,050,000
+  - xiaomi/mimo-v2.6-pro
+      OpenRouter: Xiaomi: MiMo-V2.6-Pro
+      context: 1,050,000
+
+[venice]
+  - gemini-3-8-flash
+      Venice AI: Gemini 3.8 Flash
+      context: 1,000,000
+  - deepseek-v4-1-flash
+      Venice AI: DeepSeek V4.1 Flash
+      context: 1,000,000
+  - z-ai-glm-5-3-flash
+      Venice AI: GLM 5.3 Flash
+      context: 1,048,576
+  - openai-gpt-61-sol
+      Venice AI: GPT-6.1 Sol
+      context: 1,050,000
+  - xiaomi-mimo-v2-6-flash
+      Venice AI: MiMo-V2.6-Flash
+      context: 1,000,000
+
+Skipped:
+  - venice-muse-spark: not in catalog
+
+Generated 2026-10-02T12:02:54

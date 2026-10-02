@@ -36,10 +36,9 @@ grok-models key openrouter
 grok-models key neuralwatt
 grok-models key venice
 
-# 4. Choose models and save; the picker applies the managed TOML block
-grok-models
-# Or select directly:
-# grok-models pick openrouter
+# 4. Resolve the allowlist and sync the managed TOML block
+grok-models refresh
+# (or pick models interactively first: grok-models, / grok-models pick openrouter)
 
 # 5. Start Grok; the wrapper reapplies the last resolved selection automatically
 grok
@@ -51,13 +50,18 @@ Put `~/.local/bin` on `PATH` (the installer appends this to `~/.bashrc`). The `g
 
 | Path | Role |
 |------|------|
-| `bin/grok-models` | Keys, catalog, allowlist, picker, and the validated managed TOML model block. |
+| `bin/grok-models` | Keys, catalog, allowlist, picker; syncs the managed `[model.*]` block in `~/.grok/config.toml` (backed up to `config.toml.bak-grok-models` first). |
 | `bin/grok` | Loads keys, applies the last resolved selection, then launches real Grok |
-| `config/allowlist.json` | ~16 families |
+| `config/allowlist.json` | Selection rules (version 3: auto families + pinned exact ids) |
+| `config/SELECTED-MODELS.txt` | Human-readable snapshot of the current selection |
 | `config/config.toml.example` | Default `grok-4.6` + empty helper markers |
 | `AGENTS.md` | Standing rules for Grok on the new host |
 | `install.sh` | Installs the above into `~/.local/bin` and `~/.config/grok-models` |
 
+## OpenCode on this host
+
+`~/.config/opencode/opencode.json` mirrors the same selection for OpenCode (three `@ai-sdk/openai-compatible` providers — neuralwatt, openrouter, venice — with a per-provider `whitelist` of exactly the resolved models and `apiKey: "{env:…}"` referencing `keys.env`, never a literal key). After changing the selection, update that file from `~/.config/grok-models/resolved.json` to match.
+
 ## Do not commit
 
-`keys.env`, `catalog.json`, `resolved.json`, `~/.grok/auth.json`.
+`keys.env`, `catalog.json`, `resolved.json`, `~/.grok/auth.json`, `~/.local/share/opencode/auth.json`.

@@ -1,133 +1,212 @@
 {
-  "version": 2,
+  "version": 3,
   "families": [
     {
       "family": "grok-4.6",
       "config_id": "grok-4.6",
       "provider": "native",
-      "exact": ["grok-4.6"]
-    },
-    {
-      "family": "deepseek-v4-flash",
-      "config_id": "nw-deepseek-v4-flash",
-      "provider": "neuralwatt",
-      "exact": ["deepseek-v4-flash"],
-      "prefix": ["deepseek-v4-flash"]
-    },
-    {
-      "family": "glm-5.3",
-      "config_id": "nw-glm-5-3",
-      "provider": "neuralwatt",
-      "exact": ["glm-5.3"],
-      "prefix": ["glm-5.3", "glm-5."]
-    },
-    {
-      "family": "kimi-k3",
-      "config_id": "nw-kimi-k3",
-      "provider": "neuralwatt",
-      "exact": ["kimi-k3"],
-      "prefix": ["kimi-k3"]
-    },
-    {
-      "family": "kimi-k2.7-code",
-      "config_id": "nw-kimi-k2-7-code",
-      "provider": "neuralwatt",
-      "exact": ["kimi-k2.7-code"],
-      "prefix": ["kimi-k2.7-code", "kimi-k2"]
-    },
-    {
-      "family": "claude-fable",
-      "config_id": "or-claude-fable",
-      "provider": "openrouter",
-      "exact": ["anthropic/claude-fable-5.1"],
-      "fallback": ["~anthropic/claude-fable-latest"],
-      "prefix": ["anthropic/claude-fable-"]
-    },
-    {
-      "family": "claude-opus",
-      "config_id": "or-claude-opus",
-      "provider": "openrouter",
-      "exact": ["anthropic/claude-opus-5"],
-      "fallback": ["~anthropic/claude-opus-latest"],
-      "prefix": ["anthropic/claude-opus-"]
+      "exact": [
+        "grok-4.6"
+      ]
     },
     {
       "family": "gemini-flash",
       "config_id": "or-gemini-flash",
       "provider": "openrouter",
-      "exact": ["google/gemini-3.8-flash"],
-      "fallback": ["~google/gemini-flash-latest"],
-      "prefix": ["google/gemini-3.", "google/gemini-"]
-    },
-    {
-      "family": "muse-spark",
-      "config_id": "or-muse-spark",
-      "provider": "openrouter",
-      "exact": ["meta/muse-spark-1.3"],
-      "prefix": ["meta/muse-spark-1.3"]
-    },
-    {
-      "family": "muse-spark-contributor",
-      "config_id": "or-muse-spark-contributor",
-      "provider": "openrouter",
-      "exact": ["meta/muse-spark-1.3-contributor"],
-      "prefix": ["meta/muse-spark-1.3-contributor"]
+      "exact": [
+        "google/gemini-3.8-flash"
+      ],
+      "fallback": [
+        "~google/gemini-flash-latest"
+      ],
+      "prefix": [
+        "google/gemini-3.",
+        "google/gemini-"
+      ],
+      "auto": true
     },
     {
       "family": "openrouter-auto",
       "config_id": "or-openrouter-auto",
       "provider": "openrouter",
-      "exact": ["openrouter/auto"],
-      "prefix": ["openrouter/auto"]
-    },
-    {
-      "family": "gpt-sol",
-      "config_id": "or-gpt-sol",
-      "provider": "openrouter",
-      "exact": ["openai/gpt-5.6-sol"],
-      "prefix": ["openai/gpt-5.6-sol"]
-    },
-    {
-      "family": "gpt-luna",
-      "config_id": "or-gpt-luna",
-      "provider": "openrouter",
-      "exact": ["openai/gpt-5.6-luna"],
-      "prefix": ["openai/gpt-5.6-luna"]
-    },
-    {
-      "family": "venice-deepseek-v4-flash",
-      "config_id": "venice-deepseek-v4-flash",
-      "provider": "venice",
-      "exact": ["deepseek-v4-flash-0731"],
-      "prefix": ["deepseek-v4-flash"]
-    },
-    {
-      "family": "venice-uncensored",
-      "config_id": "venice-uncensored",
-      "provider": "venice",
-      "exact": ["venice-uncensored-1-2"],
-      "prefix": ["venice-uncensored-1"]
-    },
-    {
-      "family": "venice-uncensored-rp",
-      "config_id": "venice-uncensored-rp",
-      "provider": "venice",
-      "exact": ["venice-uncensored-role-play"],
-      "prefix": ["venice-uncensored-role-play"]
+      "exact": [
+        "openrouter/auto"
+      ],
+      "prefix": [
+        "openrouter/auto"
+      ],
+      "auto": true
     },
     {
       "family": "venice-gemini-flash",
       "config_id": "venice-gemini-flash",
       "provider": "venice",
-      "exact": ["gemini-3-8-flash"],
-      "prefix": ["gemini-3-8-flash", "gemini-3-"]
+      "exact": [
+        "gemini-3-8-flash"
+      ],
+      "prefix": [
+        "gemini-3-8-flash",
+        "gemini-3-"
+      ],
+      "auto": true
     },
     {
       "family": "venice-muse-spark",
       "config_id": "venice-muse-spark",
       "provider": "venice",
-      "exact": ["muse-spark-1-3", "meta-muse-spark-1-3"],
-      "prefix": ["muse-spark", "meta-muse-spark"]
+      "exact": [
+        "muse-spark-1-3",
+        "meta-muse-spark-1-3"
+      ],
+      "prefix": [
+        "muse-spark",
+        "meta-muse-spark"
+      ],
+      "auto": true
+    },
+    {
+      "family": "deepseek/deepseek-v4.1-flash",
+      "config_id": "or-deepseek-deepseek-v4-1-flash",
+      "provider": "openrouter",
+      "exact": [
+        "deepseek/deepseek-v4.1-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "openai/gpt-6-luna",
+      "config_id": "or-openai-gpt-6-luna",
+      "provider": "openrouter",
+      "exact": [
+        "openai/gpt-6-luna"
+      ],
+      "auto": false
+    },
+    {
+      "family": "stealth/space-bunny-alpha",
+      "config_id": "or-stealth-space-bunny-alpha",
+      "provider": "openrouter",
+      "exact": [
+        "stealth/space-bunny-alpha"
+      ],
+      "auto": false
+    },
+    {
+      "family": "anthropic/claude-opus-5.5",
+      "config_id": "or-anthropic-claude-opus-5-5",
+      "provider": "openrouter",
+      "exact": [
+        "anthropic/claude-opus-5.5"
+      ],
+      "auto": false
+    },
+    {
+      "family": "openai/gpt-6.1-sol",
+      "config_id": "or-openai-gpt-6-1-sol",
+      "provider": "openrouter",
+      "exact": [
+        "openai/gpt-6.1-sol"
+      ],
+      "auto": false
+    },
+    {
+      "family": "xiaomi/mimo-v2.6-pro",
+      "config_id": "or-xiaomi-mimo-v2-6-pro",
+      "provider": "openrouter",
+      "exact": [
+        "xiaomi/mimo-v2.6-pro"
+      ],
+      "auto": false
+    },
+    {
+      "family": "deepseek-v4-1-flash",
+      "config_id": "venice-deepseek-v4-1-flash",
+      "provider": "venice",
+      "exact": [
+        "deepseek-v4-1-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "z-ai-glm-5-3-flash",
+      "config_id": "venice-z-ai-glm-5-3-flash",
+      "provider": "venice",
+      "exact": [
+        "z-ai-glm-5-3-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "openai-gpt-61-sol",
+      "config_id": "venice-openai-gpt-61-sol",
+      "provider": "venice",
+      "exact": [
+        "openai-gpt-61-sol"
+      ],
+      "auto": false
+    },
+    {
+      "family": "xiaomi-mimo-v2-6-flash",
+      "config_id": "venice-xiaomi-mimo-v2-6-flash",
+      "provider": "venice",
+      "exact": [
+        "xiaomi-mimo-v2-6-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "glm-5.3-flash",
+      "config_id": "nw-glm-5-3-flash",
+      "provider": "neuralwatt",
+      "exact": [
+        "glm-5.3-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "glm-5.3-flash-flex",
+      "config_id": "nw-glm-5-3-flash-flex",
+      "provider": "neuralwatt",
+      "exact": [
+        "glm-5.3-flash-flex"
+      ],
+      "auto": false
+    },
+    {
+      "family": "deepseek-v4.1-flash-flex",
+      "config_id": "nw-deepseek-v4-1-flash-flex",
+      "provider": "neuralwatt",
+      "exact": [
+        "deepseek-v4.1-flash-flex"
+      ],
+      "auto": false
+    },
+    {
+      "family": "deepseek-v4.1-flash",
+      "config_id": "nw-deepseek-v4-1-flash",
+      "provider": "neuralwatt",
+      "exact": [
+        "deepseek-v4.1-flash"
+      ],
+      "auto": false
+    },
+    {
+      "family": "mimo-v2.6-pro",
+      "config_id": "nw-mimo-v2-6-pro",
+      "provider": "neuralwatt",
+      "exact": [
+        "mimo-v2.6-pro"
+      ],
+      "auto": false
+    },
+    {
+      "family": "qwen-3.8-27b",
+      "config_id": "nw-qwen-3-8-27b",
+      "provider": "neuralwatt",
+      "exact": [
+        "qwen-3.8-27b"
+      ],
+      "auto": false
     }
   ]
 }

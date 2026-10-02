@@ -61,7 +61,7 @@ esac
 echo
 echo "Next:"
 echo "  grok-models key openrouter    # also: neuralwatt, venice"
-echo "  grok-models refresh"
-echo "  grok                          # ask it to apply ~/.config/grok-models/resolved.json"
+echo "  grok-models refresh           # resolves selection and syncs ~/.grok/config.toml"
+echo "  grok                          # /model to pick from the managed list"
 echo
 echo "Keys stay in ${CFG_DIR}/keys.env (mode 600). Never commit them."
